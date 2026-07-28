@@ -1,0 +1,12 @@
+# Direct top-level dependencies for HDFC RM Assist.
+# Versions are the ones proven to work together against this Ollama/Postgres setup.
+langgraph==1.2.9
+langgraph-checkpoint-postgres==3.1.0
+langchain-core==1.5.0
+langchain-ollama==1.1.0
+anthropic==0.120.0
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1
+streamlit==1.60.0
+pandas==3.0.3
+python-dotenv==1.2.2
