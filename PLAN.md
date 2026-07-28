@@ -1,147 +1,112 @@
-# HDFC RM Assist — Build Plan
+# HDFC RM Assist — Build Plan (as built)
+
+> **Status: delivered and verified.** Every item below is implemented, the smoke test
+> passes, and the project is pushed to
+> [github.com/sppandita85/hdfc-rm-agentic-app](https://github.com/sppandita85/hdfc-rm-agentic-app).
+> This document has been updated from the original pre-build plan to record what was
+> actually built — including three things that changed during implementation, in
+> [Deviations](#deviations-from-the-original-plan).
+>
+> For day-to-day work in this repo, read [CLAUDE.md](CLAUDE.md) — it covers the commands
+> and the non-obvious architecture. This file is the record of *why* the design is what it
+> is.
 
 ## Context
 
-`hdfc-rm-agentic-app/` is currently an **empty directory**. We're building, from scratch, a
-multi-agent assistant that helps a bank Relationship Manager triage inbound customer emails:
-classify each email, route it through the right agents, draft a reply, and let the RM
-accept / reject / edit before "sending". This is training material for the eclerx Agentic AI
-course, so the code needs to be readable and the agent boundaries obvious.
+Built from scratch in an empty directory: a multi-agent assistant that helps a bank
+Relationship Manager triage inbound customer emails — classify each email, route it through
+the right agents, draft a reply, and let the RM accept / reject / edit before "sending".
+Training material for the eclerx Agentic AI course, so readability and obvious agent
+boundaries were priorities over cleverness.
 
-**Everything runs locally** — Llama 3.1 via the existing Ollama container, Postgres via the
-existing `postgres` container. No external API calls, no real SMTP, no real core banking.
+Runs locally by default: Llama 3.1 via Ollama, Postgres for both the synthetic bank data
+and the LangGraph checkpoints. No real SMTP, no real core banking. Intent classification
+can optionally call Claude — see [Deviations](#deviations-from-the-original-plan).
 
-### What already exists and is being reused
+### What was reused rather than reinvented
 
-Two things materially shape this plan:
-
-1. **The Docker stack is already defined** at `~/docker/postgres-pgadmin/docker-compose.yml`
+1. **The Docker stack already existed** at `~/docker/postgres-pgadmin/docker-compose.yml`
    (compose project `local-containers`): `postgres` (postgres:16, `5432`,
    postgres/postgres/postgres), `ollama` (`11434`), `pgadmin` (`5050`), `phoenix` (`6006`).
-   All four containers exist but are **currently stopped**.
-2. **A near-identical sibling project exists** at
+   Nothing in this repo defines containers.
+2. **A near-identical sibling project** at
    `~/Desktop/trainings/hydrofit/demos/multi-agents-heavy-equipment-app/` — same stack
    (LangGraph + Ollama + Postgres + Streamlit), same shape (inbox → agents → draft → human
-   review). We mirror its layout and copy its proven helpers rather than reinventing them.
+   review). Its layout was mirrored and these helpers ported near-verbatim rather than
+   rewritten: `llm/json_parsing.py`, `llm/ollama_client.py`, `db/connection.py`,
+   `graph/checkpointer.py` (the long-lived-connection trick matters —
+   `PostgresSaver.from_conn_string()` closes its connection on block exit), and the
+   `db/seed.py` skeleton. Its pinned dependency versions were reused as a known-good set.
 
-### Deliberate deviations from the sibling project
+### Deliberate design decisions
 
-- **No Phoenix tracing** (user's call) — skip `tracing/`, and drop the `arize-phoenix-otel` /
-  `openinference-*` / `opentelemetry-*` dependencies.
-- **No `interrupt()` review node** (user's call). The graph is exactly the 5 agents from the
-  spec and ends at the Response Drafter. Streamlit owns the RM decision and writes to
-  `rm_responses`. The Postgres checkpointer is still used, purely so re-opening an already
-  processed email is instant instead of re-running the LLM.
+- **No Phoenix tracing** (user's call) — no `tracing/` package, and the
+  `arize-phoenix-otel` / `openinference-*` / `opentelemetry-*` dependencies are absent.
+  The `phoenix` container in the compose stack is simply unused.
+- **No `interrupt()` review node** (user's call). The graph is exactly the 5 agents from
+  the spec and **ends at the Response Drafter**. Streamlit owns the RM decision and writes
+  to `rm_responses`. The Postgres checkpointer is still used, purely so re-opening an
+  already-processed email is instant instead of re-running the LLM — it is a cache, not
+  resumable human-in-the-loop state.
 
 ---
 
-## Target layout
+## What was built
 
 ```
 hdfc-rm-agentic-app/
 ├── .venv/                     # python3.12 -m venv .venv  (gitignored)
-├── .env.example / .env
-├── .gitignore
+├── .env.example / .env        # .env gitignored, incl. every .env.* variant
+├── CLAUDE.md                  # guidance for future Claude Code sessions
+├── PLAN.md / README.md
 ├── requirements.txt
-├── README.md
 ├── config/settings.py         # frozen dataclass loaded from .env
 ├── db/
-│   ├── connection.py          # get_conn() contextmanager, dict_row
+│   ├── connection.py          # get_conn() ctx manager + DatabaseUnavailable
 │   ├── schema.sql             # 6 tables
-│   ├── seed_data.py           # pure data literals
-│   ├── seed.py                # drop/create db, apply schema, load data, checkpointer setup
-│   └── queries.py             # read helpers + RM-action writes
+│   ├── seed_data.py           # pure literals + validate()
+│   ├── seed.py                # drop/create db, schema, data, checkpointer setup
+│   └── queries.py             # inbox reads + RM-action writes
 ├── llm/
 │   ├── ollama_client.py       # cached ChatOllama w/ hard timeout
-│   ├── json_parsing.py        # extract_json() — fence/brace-tolerant
-│   ├── intent_prompts.py      # Type 1 / Type 2 classification + keyword fallback
-│   ├── entity_prompts.py      # entity extraction for Type 2
-│   └── draft_prompts.py       # product-reply / data-reply / cannot-serve prompts
+│   ├── anthropic_client.py    # Claude classifier (structured outputs)
+│   ├── json_parsing.py        # fence/brace-tolerant extract_json()
+│   ├── intent_prompts.py      # shared taxonomy + schema + keyword fallback
+│   ├── entity_prompts.py      # entity extraction + regex pre-pass
+│   └── draft_prompts.py       # 3 prompt variants + 3 template fallbacks
 ├── graph/
-│   ├── state.py               # RMState TypedDict
+│   ├── state.py               # RMState TypedDict (agent_path uses an append reducer)
 │   ├── builder.py             # StateGraph wiring
 │   ├── checkpointer.py        # long-lived PostgresSaver
-│   ├── initial_state.py       # build_initial_state(email_row)
-│   └── nodes/
-│       ├── intent_classifier.py
-│       ├── product_info_agent.py
-│       ├── auth_agent.py
-│       ├── data_retrieval_agent.py
-│       └── response_drafter.py
-├── scripts/smoke_test.py      # the project's test suite
+│   ├── initial_state.py
+│   └── nodes/                 # the 5 agents
+├── scripts/smoke_test.py      # the test suite
 └── ui/
-    ├── app.py
+    ├── app.py, styles.py, graph_runner.py
     └── components/{inbox_list,email_detail,agent_panel,rm_actions,audit_log}.py
 ```
 
-Files to copy near-verbatim from the sibling (adjusting names/imports only) — these are
-already proven against this exact Ollama/Postgres setup:
+### Data layer — 6 tables
 
-| New file | Source |
-|---|---|
-| `llm/json_parsing.py` | `llm/json_parsing.py` (verbatim) |
-| `llm/ollama_client.py` | `llm/ollama_client.py` |
-| `db/connection.py` | `db/connection.py` |
-| `graph/checkpointer.py` | `graph/checkpointer.py` (the long-lived-connection trick and its docstring matter — `from_conn_string()` closes the conn on block exit) |
-| `db/seed.py` skeleton | `db/seed.py` (`recreate_database` / `insert_rows` / `resolve_fk` / `print_row_counts`) |
-| `config/settings.py` | `config/settings.py`, minus the Phoenix fields |
+The 5 from the spec (`products`, `customers`, `emails`, `transactions`, `rm_responses`)
+plus **`rm_audit_log`**. The extra table exists because `rm_responses` is upserted per
+email and therefore only ever holds the *latest* decision — it cannot satisfy the "audit
+log of every RM action with timestamp" requirement on its own. A reject that is later
+regenerated and accepted must leave both a correct current state and a full history; the
+smoke test asserts exactly that.
 
----
+Seed volumes as specified: **15 products / 20 customers / 40 emails / 60 transactions.**
 
-## 1. Data layer
+`seed_data.validate()` runs before anything is written and fails the seed if an email
+quotes a reference number absent from `TRANSACTIONS`. This guards the expensive-to-debug
+failure mode: the pipeline runs fine, retrieval silently finds nothing, and the demo looks
+broken for reasons unrelated to the code. Deliberately unresolvable references (for the
+`can_serve = false` path) are whitelisted in `INTENTIONALLY_UNRESOLVABLE_REFS`.
 
-`db/schema.sql` — 6 tables (5 from spec + audit log):
+`emails.intent_type` is **not** seeded — it starts NULL and is written at runtime by the
+classifier, so classification is a genuine test rather than a lookup.
 
-```sql
-products       product_id PK, name, category, description, key_features TEXT[],
-               eligibility, interest_rate NUMERIC(5,2), fees
-customers      customer_id PK, name, email UNIQUE, account_number UNIQUE, phone, kyc_status
-emails         email_id PK, customer_email, subject, body, received_at TIMESTAMPTZ,
-               status TEXT CHECK (new|processing|answered) DEFAULT 'new',
-               intent_type TEXT NULL CHECK (type_1|type_2)
-transactions   txn_id PK, customer_id FK, type CHECK (transfer|swift|neft|rtgs),
-               amount NUMERIC(14,2), currency, status CHECK (pending|completed|failed|in_transit),
-               reference_no UNIQUE, swift_ref, initiated_at, updated_at
-rm_responses   response_id PK, email_id FK UNIQUE, draft_text, final_text,
-               rm_action CHECK (accepted|rejected|edited), edited_at TIMESTAMPTZ
-rm_audit_log   audit_id PK, email_id FK, action, detail, actor, occurred_at DEFAULT now()
-```
-
-`rm_responses` is upserted per email (`ON CONFLICT (email_id) DO UPDATE`) so it holds the
-current decision; `rm_audit_log` is append-only and is what the "Audit log" UI panel reads —
-this is why the extra table exists rather than overloading `rm_responses`.
-
-`db/seed_data.py` — synthetic HDFC-flavoured data:
-- **~15 products**: savings, salary account, current account, 3 FD variants, RD, home loan,
-  personal loan, car loan, education loan, 2 credit cards, demat, NRE/NRO.
-- **~20 customers**: Indian names, `@example.com` emails, 14-digit account numbers, mixed
-  `kyc_status` (verified / pending / expired) so the auth node has variety.
-- **~60 transactions** spread across the 20 customers, all 4 types, all 4 statuses, with
-  realistic `reference_no` (`NEFT2026...`, `RTGS...`) and `swift_ref` (`HDFCINBBXXX...`)
-  only on `swift` rows.
-- **~40 emails**, roughly half Type 1 / half Type 2. **Critical constraint:** every Type 2
-  email must quote a `reference_no`, `swift_ref`, or account number that actually exists in
-  `transactions`/`customers`, so `data_retrieval_agent` returns real rows. Include a
-  deliberate minority of unserviceable Type 2 emails (vague "where's my money?", unknown
-  sender email, non-existent reference) to exercise the `can_serve = false` path.
-
-`db/seed.py` drops and recreates the `hdfc_rm` database, applies the schema, loads data, runs
-`PostgresSaver.setup()`, prints row counts. Safe to rerun for a clean demo.
-
-## 2. LangGraph pipeline
-
-`graph/state.py` — `RMState(TypedDict, total=False)`:
-
-```
-input:       email_id, customer_email, subject, body, received_at, thread_id
-classifier:  intent_type ("type_1"|"type_2"), confidence, reasoning, classify_method
-auth:        extracted_entities: dict, can_serve: bool, auth_reason, customer_record
-retrieval:   retrieved_data: list|dict|None, data_found: bool, data_source
-drafter:     draft_text
-bookkeeping: agent_path: list[str]        # appended by every node → transparency panel
-```
-
-`graph/builder.py`:
+### LangGraph pipeline
 
 ```
 START → intent_classifier
@@ -152,137 +117,106 @@ START → intent_classifier
                                        response_drafter → END
 ```
 
-Two conditional edges: `route_by_intent` after the classifier, `route_by_auth` after the auth
-agent. `product_info_agent` and `data_retrieval_agent` both fall through to
-`response_drafter`.
+Two conditional edges: `route_by_intent` (in `intent_classifier.py`) and `route_by_auth`
+(in `auth_agent.py`), each colocated with the node whose output it branches on.
 
-**Node behaviours**
+Every LLM step has a deterministic fallback, so an unreachable model degrades the answer
+rather than failing the run: classification → keyword heuristic, entity extraction → regex
+only, drafting → fixed templates.
 
-1. **`intent_classifier`** — Llama 3.1 returns
-   `{intent_type, confidence, reasoning}`. Parsed with `extract_json`. On any Ollama failure
-   or unparseable output, falls back to a keyword heuristic (`classify_by_keywords` in
-   `llm/intent_prompts.py`: account/txn nouns → `type_2`, rate/feature nouns → `type_1`) and
-   sets `classify_method="keyword_fallback"`. Writes `intent_type` back to `emails` and flips
-   `status` to `processing`. `reasoning` is surfaced in the UI for RM trust.
+`auth_agent` performs **no real authentication** — a pass-through stub per the spec, with a
+`TODO(real-auth)` marker and a state interface (`can_serve`, `auth_reason`,
+`customer_record`, `extracted_entities`) kept stable so real verification can drop in
+without reshaping the graph.
 
-2. **`product_info_agent`** (Type 1) — SQL keyword/category match against `products` (plain
-   `ILIKE` + category scoring, no pgvector), returns top matches into `retrieved_data`.
+### UI
 
-3. **`auth_agent`** (Type 2) — LLM entity extraction (account_number, reference_no, swift_ref,
-   txn_type, amount, currency, date) plus a regex pre-pass for reference formats, since regex
-   is more reliable than a small model on alphanumeric IDs. Resolves sender against
-   `customers`. Sets `can_serve = (some usable entity present) AND (a matching record
-   exists)`, with `auth_reason` explaining the decision.
-   **Stub, per spec — no real authentication.** A prominent module docstring + inline
-   `# TODO(real-auth):` marker states that a production build would do OTP/KBA/session-token
-   verification here, and that the `can_serve` / `auth_reason` interface is intentionally
-   stable so that logic can drop in without reshaping the graph.
-
-4. **`data_retrieval_agent`** (Type 2, `can_serve=true` only) — looks up `transactions` by
-   `reference_no` → `swift_ref` → (`customer_id` + type/amount) in priority order; returns
-   status + full details into `retrieved_data`, sets `data_source` for the transparency panel.
-
-5. **`response_drafter`** — Llama 3.1 composes a plain-text RM-ready draft **strictly grounded
-   in `retrieved_data`**, with three prompt variants selected by state: product reply,
-   transaction-status reply, and the polite "need more info / cannot verify" reply when
-   `can_serve=false` or `data_found=false`. On Ollama failure, emits a deterministic
-   template-based draft so the pipeline never dead-ends. Sign-off persona comes from
-   `RM_NAME`/`RM_TITLE`/`RM_BANK` in `.env`.
-
-## 3. Streamlit UI — "HDFC RM Assist"
-
-`ui/app.py` — two-pane layout (inbox left, detail right), plus an Audit Log tab.
-
-- **Inbox**: sender, subject, received time, status badge (new/processing/answered), intent
-  tag (Type 1 / Type 2). **Filters** by status + intent type, and a free-text search over
-  subject/body/sender.
-- **Email detail**: full body plus a customer-context card (name, masked account number,
-  KYC status) resolved from `customers` by sender email.
-- **Process button**: calls `ui/graph_runner.py::process_email()` inside a
-  `st.status()` block that lists agent progress as the path resolves. `graph_runner` mirrors
-  the sibling's `get_state`-first discipline — Streamlit reruns the whole script on every
-  click, so it checks the checkpointer before ever calling `invoke()`.
-- **Agent response screen / transparency panel**: classification + confidence + the
-  classifier's reasoning trace, which path was taken (`agent_path`), extracted entities, the
-  `can_serve` decision with its reason, retrieved data (as a table), and `data_source`.
-- **RM actions**: `Accept` | `Reject` | `Accept with Edits` (inline `st.text_area`).
-  Persists to `rm_responses` + appends to `rm_audit_log`, sets `emails.status='answered'`.
-- **Regenerate draft**: clears that thread's checkpoint and re-invokes the graph.
-- **Graceful fallback**: `db/connection.py` and `llm/ollama_client.py` failures surface as
-  `st.error` banners naming the unreachable service and the fix, never a stack trace. Every
-  LLM node already has a non-LLM fallback path (above), so a dead Ollama degrades the app
-  rather than breaking it.
-
-## 4. Environment
-
-`.venv` created in the project directory with `python3.12 -m venv .venv` (host Python is
-3.12.0; the sibling project uses the same). `requirements.txt` pins the direct deps —
-`langgraph`, `langgraph-checkpoint-postgres`, `langchain-core`, `langchain-ollama`,
-`psycopg[binary]`, `psycopg-pool`, `streamlit`, `pandas`, `python-dotenv` — at the versions
-the sibling's frozen file proves work together (langgraph 1.2.9, langchain-ollama 1.1.0,
-psycopg 3.3.4, streamlit 1.60.0).
-
-`.env.example`:
-```
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/hdfc_rm
-ADMIN_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres
-OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=llama3.1
-OLLAMA_TIMEOUT_S=60
-RM_NAME=Priya Nair
-RM_TITLE=Relationship Manager
-RM_BANK=HDFC Bank
-```
-
-## 5. README
-
-Prerequisites, the container-start step, pgAdmin registration (host `postgres`, **not**
-`localhost`, from inside the pgadmin container), venv + install, `.env` table, seeding, smoke
-test, running the app, an architecture diagram, and a **Stubs & non-goals** section stating
-plainly that authentication is a pass-through, there's no SMTP, and the SWIFT/core-banking
-tables are synthetic. Carry over the sibling README's port-5432 shadowing troubleshooting
-note — a host Homebrew Postgres silently shadowing the container is a real failure mode here.
+Two-pane inbox with status/intent filters and free-text search; email detail with a
+customer-context card; on-demand **Process** (not eager — 40 emails through a local model
+on load would take ~20 minutes); an agent transparency panel showing classification,
+confidence, the model's reasoning, the path taken with skipped nodes struck through,
+extracted entities, the `can_serve` decision and the retrieved records; RM actions
+(Accept / Reject / Accept with edits / Regenerate); and an Audit Log tab.
 
 ---
 
-## Build order
+## Deviations from the original plan
 
-1. Start the Docker stack: `docker compose -f ~/docker/postgres-pgadmin/docker-compose.yml up -d`.
-2. `docker exec ollama ollama list` → confirm `llama3.1`.
-   **If absent, stop and ask before pulling** (~4.9 GB) — per your instruction.
-3. Scaffold dirs, `.gitignore`, `.venv`, `requirements.txt`, install.
-4. `config/settings.py`, `db/connection.py`, `llm/{ollama_client,json_parsing}.py` (ported).
-5. `db/schema.sql` → `db/seed_data.py` → `db/seed.py`; run `python -m db.seed`.
-6. `graph/state.py` → the 5 nodes + prompts → `builder.py` → `checkpointer.py`.
-7. `scripts/smoke_test.py`; run it.
-8. `db/queries.py` → `ui/graph_runner.py` → `ui/` components → `ui/app.py`.
-9. `README.md`.
+Three things changed after the plan was approved. All are in the shipped code.
+
+### 1. `auth_agent` rule tightened — a real defect the smoke test caught
+
+The plan specified `can_serve = (entity present) AND (record exists)`. In practice, for a
+vague email ("I sent some money and it hasn't arrived"), the model inferred
+`txn_type="transfer"`, and matching on customer + type alone pulled that customer's most
+recent transfer and reported on it confidently — **answering about a transaction the
+customer never asked about.** That is precisely the wrong-record risk a bank cannot accept.
+
+Serving now requires a **transaction reference, or a type AND amount together**
+(`_has_narrowing_pair`). An account number identifies the *customer*, not the
+*transaction*, so it resolves who is asking but never suffices on its own. The same
+condition is duplicated inline in `data_retrieval_agent`'s fallback branch — **the two must
+stay in sync**, or retrieval silently widens.
+
+### 2. Intent classification became provider-switchable
+
+Added after the initial build at the user's request, then defaulted back to local.
+`INTENT_PROVIDER` selects `ollama` (default) or `anthropic`:
+
+| Provider | Model | Output contract |
+|---|---|---|
+| `ollama` (default) | Llama 3.1, local | Asked for JSON in the prompt, parsed defensively by `json_parsing.py` |
+| `anthropic` | `claude-opus-5` | Structured outputs — `messages.parse()` with a Pydantic schema; `intent_type` is a `Literal`, so it compiles to a JSON-schema enum and a third value is impossible |
+
+**Only the classifier is switchable.** Entity extraction, product matching and drafting
+always run on local Ollama, so no account or transaction data reaches an external API — the
+classifier only ever sees the inbound email the customer already sent over the internet.
+Effort defaults to `low`: classifying a short email against a two-value taxonomy is not
+reasoning-heavy (~3s per call observed).
+
+### 3. `.gitignore` widened to `.env.*`
+
+The original rule matched the exact name `.env` only. That would not have caught a stray
+`.env.bak` / `.env.local` / `.env.save` carrying a real key into a public commit — a
+near-miss during this build. Now `.env.*` with `!.env.example` negated so the template
+still ships.
+
+---
 
 ## Verification
 
-End-to-end, in order — each step gates the next:
+All of the following were run against live services, not asserted from reading code.
 
-1. `docker compose ps` — all containers `Up`; `curl -s localhost:11434/api/tags` lists
-   `llama3.1`; `psql -h localhost -p 5432 -U postgres -c '\l'` reaches the container.
-2. `python -m db.seed` — prints row counts matching the target volumes
-   (15 / 20 / 40 / 60 / 0 / 0).
-3. **`python -m scripts.smoke_test`** — the real test. Reseeds, then drives representative
-   emails through the graph and asserts:
-   - a Type 1 email classifies `type_1`, takes the `product_info_agent` path, and its draft
-     mentions a product that exists in `products`;
-   - a Type 2 email with a valid `reference_no` classifies `type_2`, gets `can_serve=true`,
-     retrieves the matching transaction, and its draft contains that transaction's real
-     status;
-   - a vague Type 2 email gets `can_serve=false`, **skips** `data_retrieval_agent`
-     (asserted via `agent_path`), and drafts a "need more info" reply;
-   - all three RM actions (accept / edit / reject) write correctly to `rm_responses` and
-     append to `rm_audit_log`;
-   - **degraded mode**: with `OLLAMA_HOST` pointed at a dead port, a run still completes via
-     the keyword fallback + template draft.
-   Prints `SMOKE TEST PASSED`, exits 0/1.
-4. `streamlit run ui/app.py` — manually walk one Type 1 and one Type 2 email through
-   Process → transparency panel → Accept with Edits, then confirm the row landed in
-   `rm_responses` and the Audit Log tab shows it. Exercise Regenerate draft and the inbox
-   filters/search.
-5. Confirm `emails.intent_type` and `emails.status` were actually updated in Postgres
-   (via `psql` or pgAdmin at `localhost:5050`).
+1. **Services** — containers up; `llama3.1` present in Ollama; Postgres 16.14 reachable
+   from the host via Docker's proxy (checked that no native Homebrew Postgres was shadowing
+   port 5432, which is a real failure mode here).
+2. **`python -m db.seed`** — row counts exactly 15 / 20 / 40 / 60 / 0 / 0.
+3. **`python -m scripts.smoke_test`** → **SMOKE TEST PASSED**. Six numbered sections:
+   Type 1 routing and product grounding; Type 2 serviceable (correct reference extracted,
+   real transaction retrieved, draft quotes the real status); Type 2 unserviceable
+   (`can_serve=false`, `data_retrieval_agent` **skipped** — asserted via `agent_path` — and
+   the holding draft claims no status); all three RM actions incl. upsert-vs-append
+   semantics; the configured intent provider genuinely *served* the classification (not a
+   silent fallback); and degraded mode with the local model pointed at a dead port.
+4. **UI driven headlessly** via Streamlit's `AppTest` — 23 checks covering render, filters,
+   search, the transparency panel, clicking **Process** through the real pipeline, and
+   **Accept with edits** persisting to Postgres.
+5. **Draft grounding spot-checked** — e.g. a real run quoted reference `RTGS2026070202`
+   with status *in transit*, matching the seeded row exactly, with no invented settlement
+   date.
+
+### Known gap
+
+The `anthropic` provider path is exercised only when `ANTHROPIC_API_KEY` is set. Smoke test
+section [5] reports an explicit **SKIP** rather than passing silently when it isn't — worth
+preserving, because the keyword fallback is accurate enough on the seed emails that every
+other test still passes with a broken Claude setup.
+
+## Run it
+
+```bash
+docker compose -f ~/docker/postgres-pgadmin/docker-compose.yml up -d postgres ollama
+python -m db.seed
+python -m scripts.smoke_test
+streamlit run ui/app.py
+```
