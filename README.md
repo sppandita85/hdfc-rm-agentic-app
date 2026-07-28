@@ -4,10 +4,10 @@ A local, multi-agent assistant that helps a bank **Relationship Manager (RM)** t
 customer emails and draft replies. Every email is classified, routed through the right agents,
 and answered with a grounded draft — but **nothing is ever sent until the RM accepts it**.
 
-Retrieval, entity extraction and draft composition run locally on Llama 3.1 through Ollama,
-with Postgres holding both the synthetic bank data and the LangGraph checkpoints. **Intent
-classification is the one step that can call out** — it runs on Claude by default, or
-locally if you set `INTENT_PROVIDER=ollama`. See [Model providers](#model-providers).
+**Everything runs locally by default**: Llama 3.1 through Ollama, with Postgres holding
+both the synthetic bank data and the LangGraph checkpoints. No external API calls, no key
+required. Intent classification can optionally be switched to Claude by setting
+`INTENT_PROVIDER=anthropic` — see [Model providers](#model-providers).
 
 ---
 
@@ -49,8 +49,8 @@ The **Intent Classifier is the only agent with a choice of provider**, set by
 
 | `INTENT_PROVIDER` | Classifier runs on | Output contract |
 |---|---|---|
-| `anthropic` (default) | **Claude** (`claude-opus-5`) via the Anthropic API | **Structured outputs** — a JSON schema the response is constrained to, with `intent_type` as an enum. The shape always validates; there is nothing to parse defensively. |
-| `ollama` | Llama 3.1, locally | Asked for JSON in the prompt, then parsed with a fence/brace-tolerant extractor, because small local models routinely wrap JSON in prose. |
+| `ollama` (default) | Llama 3.1, locally | Asked for JSON in the prompt, then parsed with a fence/brace-tolerant extractor, because small local models routinely wrap JSON in prose. |
+| `anthropic` | **Claude** (`claude-opus-5`) via the Anthropic API | **Structured outputs** — a JSON schema the response is constrained to, with `intent_type` as an enum. The shape always validates; there is nothing to parse defensively. |
 
 Everything downstream — entity extraction, product matching, draft composition — **always
 runs on the local Ollama model**, regardless of this setting. So on the Type 2 path, no
@@ -71,9 +71,8 @@ visible rather than mistaken for a working setup.
   ports `5432` and `11434`. `pgadmin` on `5050` is optional but handy.
 - **The `llama3.1` model pulled** into the Ollama container.
 - **Python 3.12** on the host.
-- **An Anthropic API key**, if you want Claude to classify intent (the default). Without
-  one the app still runs — classification falls back to keyword matching and says so.
-  Set `INTENT_PROVIDER=ollama` to classify locally instead.
+- **No Anthropic API key needed** — the app runs fully locally out of the box. One is only
+  required if you opt into `INTENT_PROVIDER=anthropic`.
 
 ---
 
@@ -123,8 +122,8 @@ cp .env.example .env
 | `OLLAMA_HOST` | `http://localhost:11434` | |
 | `OLLAMA_MODEL` | `llama3.1` | |
 | `OLLAMA_TIMEOUT_S` | `60` | hard request timeout, so a wedged model can't hang a run |
-| `INTENT_PROVIDER` | `anthropic` | `anthropic` or `ollama` — see [Model providers](#model-providers) |
-| `ANTHROPIC_API_KEY` | *(empty)* | **Put your key here.** Only needed when `INTENT_PROVIDER=anthropic` |
+| `INTENT_PROVIDER` | `ollama` | `ollama` or `anthropic` — see [Model providers](#model-providers) |
+| `ANTHROPIC_API_KEY` | *(empty)* | Only needed if you set `INTENT_PROVIDER=anthropic` |
 | `ANTHROPIC_MODEL` | `claude-opus-5` | |
 | `ANTHROPIC_EFFORT` | `low` | `low`/`medium`/`high`/`xhigh`/`max` — the cost & latency lever |
 | `ANTHROPIC_MAX_TOKENS` | `1024` | ample for a one-label classification response |

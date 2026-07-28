@@ -2,6 +2,10 @@
 venv/
 __pycache__/
 *.py[cod]
+# Every .env variant (.env, .env.local, .env.bak, .env.save …) — but keep the template.
+# Matching only the exact name `.env` would let a stray backup carry a real key into a commit.
 .env
+.env.*
+!.env.example
 .DS_Store
 .streamlit/secrets.toml

@@ -59,7 +59,7 @@ def load_settings() -> Settings:
         ollama_host=_get("OLLAMA_HOST", "http://localhost:11434"),
         ollama_model=_get("OLLAMA_MODEL", "llama3.1"),
         ollama_timeout_s=float(_get("OLLAMA_TIMEOUT_S", "60")),
-        intent_provider=_get("INTENT_PROVIDER", "anthropic").strip().lower(),
+        intent_provider=_get("INTENT_PROVIDER", "ollama").strip().lower(),
         anthropic_api_key=_get("ANTHROPIC_API_KEY", ""),
         anthropic_model=_get("ANTHROPIC_MODEL", "claude-opus-5"),
         anthropic_effort=_get("ANTHROPIC_EFFORT", "low"),
